@@ -1,0 +1,8 @@
+{
+  "name": "BeamDrop - Peer-to-Peer Encrypted File Transfer",
+  "description": "Transfer files seamlessly between mobile, PC, and laptop via QR code with zero-knowledge end-to-end encryption, real-time speed monitoring, and passwordless authentication.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
