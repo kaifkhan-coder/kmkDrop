@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import Peer from 'peerjs';
 import {
   FileMetadata,
   TransferProgress,
@@ -91,6 +92,9 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
   const selfPeerIdRef = useRef<string | null>(null);
   const isInitiatorRef = useRef(false);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  // PeerJS Serverless references (For Vercel / Netlify / Serverless environments)
+  const peerInstanceRef = useRef<any>(null);
+  const peerConnectionRef = useRef<any>(null);
 
   // Live Connected Users / System Presence (Who and how many users are in it)
   const [activeUsersStats, setActiveUsersStats] = useState<ActiveUsersStats | null>(null);
@@ -751,6 +755,167 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
     };
   }, [roomId, keyBase64, createPeerConnection, handleControlMessage, handleRawChunkReceived]);
 
+  // 7b. Serverless PeerJS WebRTC Broker (Zero-Backend Fallback for Vercel / Netlify / Static Hosting)
+  useEffect(() => {
+    let isMounted = true;
+    let peer: any = null;
+    let activeConn: any = null;
+
+    const cleanRoom = roomId.trim().toUpperCase();
+    const hostPeerId = `beamdrop-room-${cleanRoom}`;
+    const clientPeerId = `beamdrop-peer-${cleanRoom}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+    const setupConnection = (conn: any, isOutgoing: boolean) => {
+      activeConn = conn;
+      peerConnectionRef.current = conn;
+
+      conn.on('open', () => {
+        if (!isMounted) return;
+        setIsP2PConnected(true);
+        setTransportMode('webrtc');
+        playChime('connected');
+
+        const deviceInfo = detectDevice();
+        const peerDevice: PeerDevice = {
+          id: conn.peer,
+          deviceName: isOutgoing ? 'Host PC' : 'Mobile Peer',
+          deviceType: isOutgoing ? 'desktop' : 'mobile',
+        };
+
+        setPeers((prev) => {
+          if (prev.some((p) => p.id === conn.peer)) return prev;
+          return [...prev, peerDevice];
+        });
+
+        // Exchange device info & encryption key
+        conn.send({
+          type: 'device_info',
+          device: deviceInfo,
+          keyBase64,
+        });
+      });
+
+      conn.on('data', (raw: any) => {
+        if (!isMounted) return;
+
+        // Check if raw data is binary chunk
+        if (raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) {
+          const buffer = raw instanceof ArrayBuffer ? raw : (raw as any).buffer;
+          handleRawChunkReceived(buffer);
+          return;
+        }
+
+        // Control message (JSON object)
+        const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (!msg || typeof msg !== 'object') return;
+
+        if (msg.type === 'device_info') {
+          if (msg.device) {
+            setPeers((prev) =>
+              prev.map((p) =>
+                p.id === conn.peer
+                  ? { ...p, deviceName: msg.device.name, deviceType: msg.device.type }
+                  : p
+              )
+            );
+          }
+          if (msg.keyBase64 && (!keyBase64 || keyBase64 !== msg.keyBase64)) {
+            importKeyFromBase64(msg.keyBase64)
+              .then((k) => {
+                setEncryptionKey(k);
+                setKeyBase64(msg.keyBase64);
+              })
+              .catch(() => {});
+          }
+          return;
+        }
+
+        // Forward to general control message handler
+        handleControlMessage(msg);
+      });
+
+      conn.on('close', () => {
+        if (!isMounted) return;
+        if (peerConnectionRef.current === conn) {
+          peerConnectionRef.current = null;
+          setPeers((prev) => prev.filter((p) => p.id !== conn.peer));
+          setIsP2PConnected(false);
+        }
+      });
+
+      conn.on('error', (err: any) => {
+        console.warn('PeerJS connection error:', err);
+      });
+    };
+
+    const initPeer = () => {
+      try {
+        // Attempt 1: Try creating as room Host (e.g. beamdrop-room-8K2M9X)
+        peer = new Peer(hostPeerId, {
+          config: { iceServers: ICE_SERVERS },
+        });
+        peerInstanceRef.current = peer;
+
+        peer.on('open', () => {
+          if (!isMounted) return;
+          selfPeerIdRef.current = hostPeerId;
+        });
+
+        peer.on('connection', (conn: any) => {
+          setupConnection(conn, false);
+        });
+
+        peer.on('error', (err: any) => {
+          if (!isMounted) return;
+          // If ID is already taken, someone else is hosting this room!
+          // We connect as client to the host!
+          if (err.type === 'unavailable-id') {
+            try {
+              peer.destroy();
+            } catch {}
+            peer = new Peer(clientPeerId, {
+              config: { iceServers: ICE_SERVERS },
+            });
+            peerInstanceRef.current = peer;
+
+            peer.on('open', () => {
+              if (!isMounted) return;
+              selfPeerIdRef.current = clientPeerId;
+              const conn = peer.connect(hostPeerId, { reliable: true });
+              setupConnection(conn, true);
+            });
+
+            peer.on('connection', (conn: any) => {
+              setupConnection(conn, false);
+            });
+          } else {
+            console.warn('PeerJS broker event:', err.type);
+          }
+        });
+      } catch (err) {
+        console.warn('Failed to initialize PeerJS broker:', err);
+      }
+    };
+
+    initPeer();
+
+    return () => {
+      isMounted = false;
+      if (activeConn) {
+        try {
+          activeConn.close();
+        } catch {}
+      }
+      if (peer) {
+        try {
+          peer.destroy();
+        } catch {}
+      }
+      peerConnectionRef.current = null;
+      peerInstanceRef.current = null;
+    };
+  }, [roomId, keyBase64, handleControlMessage, handleRawChunkReceived]);
+
   // 8. Start transferring a single file (Sender side)
   const transferFile = async (file: File) => {
     if (!encryptionKey) {
@@ -777,8 +942,9 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
       checksum,
     };
 
+    const hasPeerConn = Boolean(peerConnectionRef.current && peerConnectionRef.current.open);
     const hasDataChannel = dataChannelRef.current?.readyState === 'open';
-    const activeTransport: 'webrtc' | 'relay' = hasDataChannel ? 'webrtc' : 'relay';
+    const activeTransport: 'webrtc' | 'relay' = (hasPeerConn || hasDataChannel) ? 'webrtc' : 'relay';
 
     // Broadcast file metadata
     const metaMessage = {
@@ -788,7 +954,9 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
       senderDeviceName: deviceInfo.name,
     };
 
-    if (hasDataChannel) {
+    if (hasPeerConn) {
+      peerConnectionRef.current.send(metaMessage);
+    } else if (hasDataChannel) {
       dataChannelRef.current!.send(JSON.stringify(metaMessage));
     } else if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(metaMessage));
@@ -820,7 +988,8 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
     for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
       if (cancelTransferRef.current) {
         const cancelMsg = { type: 'cancel_transfer', roomId, fileId };
-        if (hasDataChannel) dataChannelRef.current?.send(JSON.stringify(cancelMsg));
+        if (hasPeerConn) peerConnectionRef.current.send(cancelMsg);
+        else if (hasDataChannel) dataChannelRef.current?.send(JSON.stringify(cancelMsg));
         else wsRef.current?.send(JSON.stringify(cancelMsg));
         setCurrentTransfer((prev) =>
           prev ? { ...prev, status: 'cancelled', error: 'Transfer cancelled by user.' } : null
@@ -841,7 +1010,20 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
       // Encrypt chunk with AES-GCM
       const encryptedChunk = await encryptChunk(rawChunkSlice, encryptionKey, fileId, chunkIdx);
 
-      if (hasDataChannel) {
+      if (hasPeerConn) {
+        // Backpressure management for PeerJS DataConnection
+        const dc = peerConnectionRef.current.dataChannel;
+        while (dc && dc.bufferedAmount > 256 * 1024) {
+          await new Promise((r) => setTimeout(r, 15));
+        }
+
+        const packet = new ArrayBuffer(4 + encryptedChunk.byteLength);
+        const view = new DataView(packet);
+        view.setUint32(0, chunkIdx, false);
+        new Uint8Array(packet, 4).set(new Uint8Array(encryptedChunk));
+
+        peerConnectionRef.current.send(packet);
+      } else if (hasDataChannel) {
         // Backpressure management for WebRTC RTCDataChannel
         while (dataChannelRef.current!.bufferedAmount > 256 * 1024) {
           await new Promise((r) => setTimeout(r, 15));
@@ -909,7 +1091,9 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
 
     // Transfer Complete
     const completeMsg = { type: 'transfer_complete', roomId, fileId };
-    if (hasDataChannel) {
+    if (hasPeerConn) {
+      peerConnectionRef.current.send(completeMsg);
+    } else if (hasDataChannel) {
       dataChannelRef.current?.send(JSON.stringify(completeMsg));
     } else {
       wsRef.current?.send(JSON.stringify(completeMsg));
@@ -995,8 +1179,11 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
         },
       };
 
+      const hasPeerConn = Boolean(peerConnectionRef.current && peerConnectionRef.current.open);
       const hasDataChannel = dataChannelRef.current?.readyState === 'open';
-      if (hasDataChannel) {
+      if (hasPeerConn) {
+        peerConnectionRef.current.send(payload);
+      } else if (hasDataChannel) {
         dataChannelRef.current!.send(JSON.stringify(payload));
       } else if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify(payload));
