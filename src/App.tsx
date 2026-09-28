@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Smartphone,
   Laptop,
@@ -21,6 +21,7 @@ import {
   ArrowRight,
   Share2,
   MessageSquare,
+  Hash,
 } from 'lucide-react';
 import { Header } from './components/Header';
 import { QRCodeDisplay } from './components/QRCodeDisplay';
@@ -34,6 +35,8 @@ import { AuthModal } from './components/AuthModal';
 import { FeedbackSection } from './components/FeedbackSection';
 import { TextMessageSection } from './components/TextMessageSection';
 import { ActiveUsersModal } from './components/ActiveUsersModal';
+import { MobileConnectionSteps } from './components/MobileConnectionSteps';
+import { JoinRoomModal } from './components/JoinRoomModal';
 import { useTransferEngine } from './hooks/useTransferEngine';
 import { ThemeMode, UserSession, ReceivedFileItem } from './types';
 import { formatBytes, getFileCategory } from './utils/format';
@@ -51,6 +54,7 @@ export default function App() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isUsersModalOpen, setIsUsersModalOpen] = useState(false);
+  const [isJoinRoomOpen, setIsJoinRoomOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<ReceivedFileItem | null>(null);
 
   // Authenticated User Session
@@ -137,6 +141,15 @@ export default function App() {
     setTheme((prev) => (prev === 'light' ? 'dark' : prev === 'dark' ? 'oled' : 'light'));
   };
 
+  const handleJoinRoom = useCallback((newRoomId: string) => {
+    const cleanCode = newRoomId.trim().toUpperCase();
+    if (!cleanCode) return;
+    setRoomId(cleanCode);
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set('room', cleanCode);
+    window.history.pushState({}, '', newUrl.toString());
+  }, [setRoomId]);
+
   const handleFilesSelected = (newFiles: File[]) => {
     setSelectedFiles((prev) => [...prev, ...newFiles]);
   };
@@ -204,6 +217,10 @@ export default function App() {
         onLogout={handleLogout}
         peersCount={peers.length}
         unreadMessagesCount={textMessages.filter((m) => m.direction === 'received').length}
+        activeUsersCount={activeUsersStats?.totalOnlineUsers || Math.max(1, peers.length + 1)}
+        onOpenActiveUsers={() => setIsUsersModalOpen(true)}
+        onOpenJoinRoom={() => setIsJoinRoomOpen(true)}
+        currentRoomId={roomId}
       />
 
       {/* Main Viewport Container */}
@@ -235,6 +252,31 @@ export default function App() {
         {/* TAB 1: SEND FILES */}
         {currentTab === 'send' && (
           <div className="space-y-8">
+            {/* Quick helper banner to connect mobile */}
+            {peers.length === 0 && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-indigo-200/80 bg-indigo-50/50 p-4 dark:border-indigo-900/40 dark:bg-indigo-950/20">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-700 dark:text-indigo-300">
+                    <Smartphone className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-neutral-900 dark:text-white">
+                      Connecting from your phone?
+                    </h4>
+                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                      Scan the QR code to pair your mobile camera or view the 3-step setup guide.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCurrentTab('receive')}
+                  className="flex items-center gap-1.5 shrink-0 rounded-xl bg-neutral-900 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-100 transition whitespace-nowrap"
+                >
+                  <span>Connect Mobile (3 Steps)</span>
+                  <ArrowRight className="h-3 w-3" />
+                </button>
+              </div>
+            )}
             {/* Hero Banner with Generated Asset */}
             <div className="relative overflow-hidden rounded-3xl border border-neutral-200/80 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900/60 sm:p-10">
               <div className="flex flex-col lg:flex-row items-center justify-between gap-8">
@@ -274,7 +316,15 @@ export default function App() {
                       className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800 transition"
                     >
                       <Camera className="h-4 w-4 text-neutral-500" />
-                      <span>Scan QR with Camera</span>
+                      <span>Scan QR (Method 1)</span>
+                    </button>
+
+                    <button
+                      onClick={() => setIsJoinRoomOpen(true)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800 transition"
+                    >
+                      <Hash className="h-4 w-4 text-emerald-500" />
+                      <span>Enter Code (Method 2)</span>
                     </button>
 
                     <button
@@ -450,6 +500,17 @@ export default function App() {
               </p>
             </div>
 
+            {/* Step-by-Step Guide to Connect Mobile */}
+            <MobileConnectionSteps
+              pairingUrl={pairingUrl}
+              roomId={roomId}
+              peersCount={peers.length}
+              onOpenQRScanner={() => setIsScannerOpen(true)}
+              onOpenMessages={() => setCurrentTab('messages')}
+              onOpenJoinModal={() => setIsJoinRoomOpen(true)}
+              onJoinRoom={handleJoinRoom}
+            />
+
             {/* Quick Action banner to switch to Text / Clipboard */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/30">
               <div className="flex items-center gap-3">
@@ -485,13 +546,15 @@ export default function App() {
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start max-w-4xl mx-auto">
-              {/* QR Code */}
+              {/* QR Code & Code Pairing (Both Methods) */}
               <QRCodeDisplay
                 url={pairingUrl}
                 roomId={roomId}
                 peersCount={peers.length}
                 isSignedIn={Boolean(user)}
                 onRequireAuth={() => setIsAuthOpen(true)}
+                onJoinRoom={handleJoinRoom}
+                onOpenQRScanner={() => setIsScannerOpen(true)}
               />
 
               {/* Receiving Controls & Files Table */}
@@ -627,10 +690,132 @@ export default function App() {
           />
         )}
 
+        {/* TAB: ACTIVE USERS & CONNECTED PEERS DIRECTORY */}
+        {currentTab === 'users' && (
+          <section className="rounded-3xl border border-neutral-200/90 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900/60 sm:p-8 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-neutral-100 dark:border-neutral-800">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-neutral-100/80 px-3 py-1 text-xs font-semibold text-neutral-800 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200 mb-2">
+                  <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Real-time Active Users Monitor</span>
+                </div>
+                <h3 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-white">
+                  Active Users & Connected Devices ({activeUsersStats?.totalOnlineUsers || Math.max(1, peers.length + 1)})
+                </h3>
+                <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                  Live directory of who is currently online, their active device types, connected rooms, and real-time status.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={fetchActiveUsers}
+                  className="flex items-center gap-1.5 rounded-xl border border-neutral-300 bg-white px-3.5 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 transition"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 text-neutral-400" />
+                  <span>Refresh</span>
+                </button>
+                <button
+                  onClick={() => setIsUsersModalOpen(true)}
+                  className="flex items-center gap-1.5 rounded-xl bg-neutral-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-100 transition"
+                >
+                  <span>Focus View</span>
+                </button>
+              </div>
+            </div>
+
+            {/* List of active users */}
+            <div className="space-y-3">
+              {(!activeUsersStats?.users || activeUsersStats.users.length === 0) ? (
+                <div className="py-12 text-center text-xs text-neutral-400">
+                  <p className="text-sm font-medium text-neutral-600 dark:text-neutral-300">
+                    Your device is currently connected to room <span className="font-mono font-bold text-neutral-900 dark:text-white">{roomId}</span>
+                  </p>
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    Scan the QR code on your mobile phone to connect and see multiple devices here.
+                  </p>
+                </div>
+              ) : (
+                activeUsersStats.users.map((peer) => (
+                  <div
+                    key={peer.id}
+                    className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border p-4 transition ${
+                      peer.isSelf
+                        ? 'border-indigo-200 bg-indigo-50/50 dark:border-indigo-900/60 dark:bg-indigo-950/20'
+                        : 'border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800">
+                        {peer.deviceType === 'mobile' ? (
+                          <Smartphone className="h-4 w-4 text-emerald-500" />
+                        ) : (
+                          <Laptop className="h-4 w-4 text-indigo-500" />
+                        )}
+                        <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 dark:border-neutral-900" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-neutral-900 dark:text-white">
+                            {peer.name}
+                          </span>
+                          {peer.isSelf && (
+                            <span className="rounded-md bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                              You
+                            </span>
+                          )}
+                          {peer.roomId === roomId && !peer.isSelf && (
+                            <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                              Paired Room
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+                          {peer.email ? (
+                            <span className="font-mono text-neutral-700 dark:text-neutral-300 font-medium">
+                              {peer.email}
+                            </span>
+                          ) : (
+                            <span className="italic">Guest Peer ({peer.deviceName})</span>
+                          )}
+                          <span>·</span>
+                          <span>Device: {peer.deviceName}</span>
+                          <span>·</span>
+                          <span>Room: <code className="font-mono text-[10px]">{peer.roomId.slice(0, 8)}</code></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {peer.roomId === roomId ? (
+                        <button
+                          onClick={() => setCurrentTab('messages')}
+                          className="flex items-center gap-1.5 rounded-xl bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-100 transition"
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          <span>Send Text to Device</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setRoomId(peer.roomId)}
+                          className="flex items-center gap-1.5 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 transition"
+                        >
+                          <span>Join Room</span>
+                          <ArrowRight className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
         {/* TAB 4: SECURITY & E2EE ARCHITECTURE */}
         {currentTab === 'security' && <SecurityExplainer />}
 
-        {/* PERSISTENT SYSTEM EVALUATION & FEEDBACK SECTION (SENT DIRECTLY TO khankaifcom551@gmail.com) */}
+        {/* SYSTEM EVALUATION & FEEDBACK SECTION */}
         <FeedbackSection
           user={user}
           onOpenAuth={() => setIsAuthOpen(true)}
@@ -664,6 +849,29 @@ export default function App() {
         onClose={() => setPreviewFile(null)}
         isSignedIn={Boolean(user)}
         onRequireAuth={() => setIsAuthOpen(true)}
+      />
+
+      {/* 4. Active Users & Devices Directory Modal */}
+      <ActiveUsersModal
+        isOpen={isUsersModalOpen}
+        onClose={() => setIsUsersModalOpen(false)}
+        stats={activeUsersStats}
+        onRefresh={fetchActiveUsers}
+        currentRoomId={roomId}
+        onSelectRoom={(newRoomId) => {
+          setRoomId(newRoomId);
+          setCurrentTab('send');
+        }}
+        onOpenMessages={() => setCurrentTab('messages')}
+      />
+
+      {/* 5. Join Room by Code Modal (Method 2) */}
+      <JoinRoomModal
+        isOpen={isJoinRoomOpen}
+        onClose={() => setIsJoinRoomOpen(false)}
+        currentRoomId={roomId}
+        onJoinRoom={handleJoinRoom}
+        onOpenQRScanner={() => setIsScannerOpen(true)}
       />
 
 

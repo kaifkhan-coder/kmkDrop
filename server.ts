@@ -387,7 +387,7 @@ async function bootstrap() {
   // In-memory feedback store
   const feedbackList: any[] = [];
 
-  // 5. Submit Suggestion, Feedback, Rating & Evaluation data (routed to khankaifcom551@gmail.com)
+  // 5. Submit Suggestion, Feedback, Rating & Evaluation data (recorded securely)
   app.post('/api/feedback', (req: Request, res: Response) => {
     const { rating, category, feedbackText, userEmail, userName, deviceInfo, transferStats } = req.body;
 
@@ -397,7 +397,7 @@ async function bootstrap() {
 
     const submission = {
       id: crypto.randomUUID(),
-      targetRecipient: 'khankaifcom551@gmail.com',
+      targetRecipient: 'feedback@beamdrop.app',
       rating: Number(rating),
       category: category || 'suggestion',
       feedbackText: String(feedbackText).trim(),
@@ -411,7 +411,7 @@ async function bootstrap() {
 
     feedbackList.unshift(submission);
 
-    console.log(`[BeamDrop Feedback] New submission dispatched to khankaifcom551@gmail.com:`, {
+    console.log(`[BeamDrop Feedback] New submission recorded:`, {
       from: submission.userEmail,
       rating: submission.rating,
       category: submission.category,
@@ -420,9 +420,9 @@ async function bootstrap() {
 
     return res.json({
       success: true,
-      message: 'Thank you! Your feedback and evaluation data have been successfully recorded and transmitted to khankaifcom551@gmail.com.',
+      message: 'Thank you! Your feedback and evaluation data have been successfully recorded.',
       submissionId: submission.id,
-      recipient: 'khankaifcom551@gmail.com',
+      recipient: 'feedback@beamdrop.app',
     });
   });
 

@@ -117,7 +117,7 @@ export const FeedbackSection: React.FC<FeedbackSectionProps> = ({
           </h3>
           <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400 max-w-xl leading-relaxed">
             All reviews, ratings, system suggestions, and telemetry feedback will be automatically compiled and dispatched to{' '}
-            <span className="font-semibold text-neutral-800 dark:text-neutral-200 font-mono">khankaifcom551@gmail.com</span> for rigorous evaluation of the P2P transfer engine.
+            <span className="font-semibold text-neutral-800 dark:text-neutral-200 font-mono">feedback@beamdrop.app</span> for continuous enhancement of the P2P transfer engine.
           </p>
         </div>
 
@@ -126,11 +126,11 @@ export const FeedbackSection: React.FC<FeedbackSectionProps> = ({
           <div className="text-[11px] text-neutral-400 font-mono">Recipient:</div>
           <div className="text-xs font-semibold text-neutral-900 dark:text-white flex items-center gap-1.5 mt-0.5">
             <Mail className="h-3.5 w-3.5 text-indigo-500" />
-            <span>khankaifcom551@gmail.com</span>
+            <span>feedback@beamdrop.app</span>
           </div>
           <div className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-1 font-medium">
             <CheckCircle2 className="h-3 w-3" />
-            <span>Verified System Evaluator</span>
+            <span>System Feedback Console</span>
           </div>
         </div>
       </div>
@@ -152,7 +152,7 @@ export const FeedbackSection: React.FC<FeedbackSectionProps> = ({
             <p className="font-semibold">{submittedStatus.message}</p>
             {submittedStatus.id && (
               <p className="mt-1 font-mono text-[10px] opacity-80">
-                Receipt ID: {submittedStatus.id} · Dispatched to khankaifcom551@gmail.com
+                Receipt ID: {submittedStatus.id} · Recorded in system feedback logs
               </p>
             )}
           </div>
@@ -273,18 +273,18 @@ export const FeedbackSection: React.FC<FeedbackSectionProps> = ({
         {/* Submit button & Mailto fallback */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
           <div className="text-[11px] text-neutral-400">
-            Automated transmission directly records your evaluation for Kaif Khan.
+            Automated transmission directly records your evaluation for the BeamDrop team.
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <a
-              href={`mailto:khankaifcom551@gmail.com?subject=BeamDrop Evaluation (${category})&body=Rating: ${rating}/5%0D%0A%0D%0AFeedback:%0D%0A${encodeURIComponent(
+              href={`mailto:feedback@beamdrop.app?subject=BeamDrop Evaluation (${category})&body=Rating: ${rating}/5%0D%0A%0D%0AFeedback:%0D%0A${encodeURIComponent(
                 feedbackText || 'BeamDrop evaluation review'
               )}%0D%0A%0D%0ASent from: ${encodeURIComponent(senderEmail || 'Peer Tester')}`}
               className="text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-white px-3 py-2 transition"
               title="Open default email client"
             >
-              Open in Gmail / Mail App
+              Open in Mail App
             </a>
 
             <button

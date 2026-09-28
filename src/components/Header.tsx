@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Moon, Sparkles, ShieldCheck, User as UserIcon, LogOut, Laptop, Smartphone, Users } from 'lucide-react';
+import { Sun, Moon, Sparkles, ShieldCheck, User as UserIcon, LogOut, Laptop, Smartphone, Users, Hash } from 'lucide-react';
 import { ThemeMode, UserSession } from '../types';
 
 interface HeaderProps {
@@ -14,6 +14,8 @@ interface HeaderProps {
   unreadMessagesCount?: number;
   activeUsersCount?: number;
   onOpenActiveUsers?: () => void;
+  onOpenJoinRoom?: () => void;
+  currentRoomId?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -28,6 +30,8 @@ export const Header: React.FC<HeaderProps> = ({
   unreadMessagesCount = 0,
   activeUsersCount = 1,
   onOpenActiveUsers,
+  onOpenJoinRoom,
+  currentRoomId,
 }) => {
   return (
     <header className="sticky top-0 z-40 w-full border-b border-neutral-200/80 bg-white/90 backdrop-blur-md transition-colors dark:border-neutral-800 dark:bg-neutral-950/90">
@@ -136,6 +140,19 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Zone 3: 1-2 Primary Actions */}
         <div className="flex items-center gap-2">
+          {/* Join Room by Code Button */}
+          {onOpenJoinRoom && (
+            <button
+              onClick={onOpenJoinRoom}
+              title="Enter a room code to join an existing session"
+              className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-800 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800 transition"
+            >
+              <Hash className="h-3.5 w-3.5 text-indigo-500" />
+              <span className="hidden sm:inline">Join Room</span>
+              <span className="sm:hidden">Join</span>
+            </button>
+          )}
+
           {/* Theme switcher */}
           <button
             onClick={onToggleTheme}
