@@ -113,10 +113,13 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roomParam = params.get('room');
-    if (roomParam && roomParam !== roomId) {
-      setRoomId(roomParam);
-      // Switch receiver to receive or send view
-      setCurrentTab('receive');
+    if (roomParam) {
+      const cleanParam = roomParam.trim().toUpperCase();
+      if (cleanParam && cleanParam !== roomId.trim().toUpperCase()) {
+        setRoomId(cleanParam);
+        // Switch receiver to receive or send view
+        setCurrentTab('receive');
+      }
     }
   }, [roomId, setRoomId]);
 

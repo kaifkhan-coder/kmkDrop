@@ -23,22 +23,31 @@ import {
 import { detectDevice } from '../utils/format';
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk
-const ICE_SERVERS = [
+const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
 export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: string) {
-  // Session State
+  // Session State - Standardized uppercase alphanumeric room code
   const [roomId, setRoomId] = useState<string>(() => {
-    if (initialRoomId) return initialRoomId;
+    if (initialRoomId) return initialRoomId.trim().toUpperCase();
     // Check URL query
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get('room');
-    if (roomParam) return roomParam;
-    // Generate new clean 8-character ID
-    return Math.random().toString(36).substring(2, 10);
+    if (roomParam) return roomParam.trim().toUpperCase();
+    // Generate clean 6-character uppercase code (e.g. 7X9K2P) - easy to type and scan
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
   });
 
   const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
@@ -81,6 +90,7 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
   const activePeerIdRef = useRef<string | null>(null);
   const selfPeerIdRef = useRef<string | null>(null);
   const isInitiatorRef = useRef(false);
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   // Live Connected Users / System Presence (Who and how many users are in it)
   const [activeUsersStats, setActiveUsersStats] = useState<ActiveUsersStats | null>(null);
@@ -193,6 +203,7 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
     if (pcRef.current) {
       pcRef.current.close();
     }
+    pendingIceCandidatesRef.current = [];
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     pcRef.current = pc;
@@ -484,171 +495,261 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
     }
   }, [addToHistory, currentTransfer?.peerDeviceName]);
 
-  // 7. WebSocket Signaling Connection
+  // 7. WebSocket Signaling Connection with Heartbeat & Auto-reconnect
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    let isCleanedUp = false;
+    let pingInterval: any = null;
+    let reconnectTimeout: any = null;
+    const cleanRoom = roomId.trim().toUpperCase();
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    const connect = () => {
+      if (isCleanedUp) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
 
-    ws.onopen = () => {
-      setIsWsConnected(true);
-      const deviceInfo = detectDevice();
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-      let userEmail: string | undefined;
-      let userName: string | undefined;
-      try {
-        const saved = localStorage.getItem('beamdrop_user');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          userEmail = parsed.email;
-          userName = parsed.name;
+      ws.onopen = () => {
+        if (isCleanedUp) {
+          ws.close();
+          return;
         }
-      } catch {
-        // ignore
-      }
+        setIsWsConnected(true);
+        const deviceInfo = detectDevice();
 
-      ws.send(
-        JSON.stringify({
-          type: 'join',
-          roomId,
-          deviceName: deviceInfo.name,
-          deviceType: deviceInfo.type,
-          userEmail,
-          userName,
-        })
-      );
-    };
-
-    ws.onclose = () => {
-      setIsWsConnected(false);
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        const { type } = msg;
-
-        if (type === 'room_joined') {
-          if (msg.peerId) {
-            selfPeerIdRef.current = msg.peerId;
+        let userEmail: string | undefined;
+        let userName: string | undefined;
+        try {
+          const saved = localStorage.getItem('beamdrop_user');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            userEmail = parsed.email;
+            userName = parsed.name;
           }
-          if (msg.peers && Array.isArray(msg.peers)) {
-            setPeers(msg.peers);
-            // If there's an existing peer, initiate WebRTC connection
-            if (msg.peers.length > 0) {
-              const target = msg.peers[0];
-              isInitiatorRef.current = true;
-              createPeerConnection(target.id, true);
+        } catch {
+          // ignore
+        }
+
+        ws.send(
+          JSON.stringify({
+            type: 'join',
+            roomId: cleanRoom,
+            deviceName: deviceInfo.name,
+            deviceType: deviceInfo.type,
+            userEmail,
+            userName,
+          })
+        );
+
+        // Keepalive ping every 12 seconds to prevent Cloud Run / Reverse Proxy idle drops
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 12000);
+      };
+
+      ws.onclose = () => {
+        setIsWsConnected(false);
+        if (pingInterval) clearInterval(pingInterval);
+        if (!isCleanedUp) {
+          // Auto-reconnect after 1.5s backoff
+          reconnectTimeout = setTimeout(connect, 1500);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.warn('WebSocket signaling connection error:', err);
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          const { type } = msg;
+
+          if (type === 'pong') {
+            return;
+          }
+
+          if (type === 'room_joined') {
+            if (msg.peerId) {
+              selfPeerIdRef.current = msg.peerId;
             }
-          }
-          return;
-        }
+            if (msg.peers && Array.isArray(msg.peers)) {
+              setPeers(msg.peers);
+              if (msg.peers.length > 0) {
+                const target = msg.peers[0];
+                isInitiatorRef.current = true;
+                createPeerConnection(target.id, true);
 
-        if (type === 'peer_joined') {
-          const { peer } = msg;
-          setPeers((prev) => [...prev.filter((p) => p.id !== peer.id), peer]);
-          playChime('connected');
-          // If we are sender or ready, we can offer
-          if (!pcRef.current) {
-            createPeerConnection(peer.id, false);
+                // Share encryption key with peers in the room
+                if (keyBase64 && ws.readyState === WebSocket.OPEN) {
+                  ws.send(
+                    JSON.stringify({
+                      type: 'key_sync',
+                      roomId: cleanRoom,
+                      keyBase64,
+                    })
+                  );
+                }
+              }
+            }
+            return;
           }
-          return;
-        }
 
-        if (type === 'peer_left') {
-          setPeers((prev) => prev.filter((p) => p.id !== msg.peerId));
-          if (pcRef.current) {
-            pcRef.current.close();
-            pcRef.current = null;
-          }
-          setIsP2PConnected(false);
-          return;
-        }
-
-        // WebRTC Signaling
-        if (type === 'signal') {
-          const { fromPeerId, signalData } = msg;
-          if (!pcRef.current) {
-            createPeerConnection(fromPeerId, false);
-          }
-          const pc = pcRef.current!;
-
-          if (signalData.desc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(signalData.desc));
-            if (signalData.desc.type === 'offer') {
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
+          if (type === 'peer_joined') {
+            const { peer } = msg;
+            setPeers((prev) => [...prev.filter((p) => p.id !== peer.id), peer]);
+            playChime('connected');
+            if (!pcRef.current) {
+              createPeerConnection(peer.id, false);
+            }
+            // Share encryption key with newly joined peer
+            if (keyBase64 && ws.readyState === WebSocket.OPEN) {
               ws.send(
                 JSON.stringify({
-                  type: 'signal',
-                  targetPeerId: fromPeerId,
-                  signalData: { desc: pc.localDescription },
+                  type: 'key_sync',
+                  roomId: cleanRoom,
+                  keyBase64,
                 })
               );
             }
-          } else if (signalData.candidate) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
-            } catch (err) {
-              console.warn('Error adding ICE candidate:', err);
+            return;
+          }
+
+          if (type === 'peer_left') {
+            setPeers((prev) => prev.filter((p) => p.id !== msg.peerId));
+            if (pcRef.current) {
+              pcRef.current.close();
+              pcRef.current = null;
             }
-          }
-          return;
-        }
-
-        // Encrypted WebSocket Relay Fallback
-        if (type === 'transfer_meta') {
-          handleControlMessage(msg);
-          return;
-        }
-
-        if (type === 'relay_chunk') {
-          const { chunkIndex, chunkBase64 } = msg;
-          // Decode base64 to buffer
-          const binaryStr = atob(chunkBase64);
-          const bytes = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) {
-            bytes[i] = binaryStr.charCodeAt(i);
+            setIsP2PConnected(false);
+            setTransportMode('relay');
+            return;
           }
 
-          // Pack with 4-byte chunk index prefix
-          const fullBuffer = new ArrayBuffer(4 + bytes.byteLength);
-          const view = new DataView(fullBuffer);
-          view.setUint32(0, chunkIndex, false);
-          new Uint8Array(fullBuffer, 4).set(bytes);
+          // Key synchronization between devices (e.g. joined via manual room code)
+          if (type === 'key_sync') {
+            if (msg.keyBase64 && (!keyBase64 || keyBase64 !== msg.keyBase64)) {
+              try {
+                const imported = await importKeyFromBase64(msg.keyBase64);
+                setEncryptionKey(imported);
+                setKeyBase64(msg.keyBase64);
+              } catch (err) {
+                console.warn('Failed to import synced key:', err);
+              }
+            }
+            return;
+          }
 
-          handleRawChunkReceived(fullBuffer);
-          return;
-        }
+          // WebRTC Signaling with Buffered ICE Candidates
+          if (type === 'signal') {
+            const { fromPeerId, signalData } = msg;
+            if (!pcRef.current) {
+              createPeerConnection(fromPeerId, false);
+            }
+            const pc = pcRef.current!;
 
-        if (type === 'transfer_complete') {
-          handleControlMessage(msg);
-          return;
-        }
+            if (signalData.desc) {
+              await pc.setRemoteDescription(new RTCSessionDescription(signalData.desc));
 
-        if (type === 'cancel_transfer') {
-          handleControlMessage(msg);
-          return;
-        }
+              // Drain any queued ICE candidates that arrived before the remote description was set
+              while (pendingIceCandidatesRef.current.length > 0) {
+                const queuedCand = pendingIceCandidatesRef.current.shift();
+                if (queuedCand) {
+                  try {
+                    await pc.addIceCandidate(new RTCIceCandidate(queuedCand));
+                  } catch (e) {
+                    console.warn('Error applying queued ICE candidate:', e);
+                  }
+                }
+              }
 
-        if (type === 'peer_text_message') {
-          handleControlMessage(msg);
-          return;
+              if (signalData.desc.type === 'offer') {
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(
+                    JSON.stringify({
+                      type: 'signal',
+                      targetPeerId: fromPeerId,
+                      signalData: { desc: pc.localDescription },
+                    })
+                  );
+                }
+              }
+            } else if (signalData.candidate) {
+              if (pc.remoteDescription && pc.remoteDescription.type) {
+                try {
+                  await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+                } catch (err) {
+                  console.warn('Error adding ICE candidate:', err);
+                }
+              } else {
+                pendingIceCandidatesRef.current.push(signalData.candidate);
+              }
+            }
+            return;
+          }
+
+          // Encrypted WebSocket Relay Fallback
+          if (type === 'transfer_meta') {
+            handleControlMessage(msg);
+            return;
+          }
+
+          if (type === 'relay_chunk') {
+            const { chunkIndex, chunkBase64 } = msg;
+            const binaryStr = atob(chunkBase64);
+            const bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+              bytes[i] = binaryStr.charCodeAt(i);
+            }
+
+            const fullBuffer = new ArrayBuffer(4 + bytes.byteLength);
+            const view = new DataView(fullBuffer);
+            view.setUint32(0, chunkIndex, false);
+            new Uint8Array(fullBuffer, 4).set(bytes);
+
+            handleRawChunkReceived(fullBuffer);
+            return;
+          }
+
+          if (type === 'transfer_complete') {
+            handleControlMessage(msg);
+            return;
+          }
+
+          if (type === 'cancel_transfer') {
+            handleControlMessage(msg);
+            return;
+          }
+
+          if (type === 'peer_text_message') {
+            handleControlMessage(msg);
+            return;
+          }
+        } catch (err) {
+          console.error('Error parsing WebSocket message:', err);
         }
-      } catch (err) {
-        console.error('Error parsing WebSocket message:', err);
-      }
+      };
     };
+
+    connect();
 
     return () => {
-      ws.close();
+      isCleanedUp = true;
+      if (pingInterval) clearInterval(pingInterval);
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (wsRef.current) wsRef.current.close();
       if (pcRef.current) {
         pcRef.current.close();
+        pcRef.current = null;
       }
     };
-  }, [roomId, createPeerConnection, handleControlMessage, handleRawChunkReceived]);
+  }, [roomId, keyBase64, createPeerConnection, handleControlMessage, handleRawChunkReceived]);
 
   // 8. Start transferring a single file (Sender side)
   const transferFile = async (file: File) => {
@@ -929,7 +1030,8 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
   // 11. Generate full shareable pairing URL (with encryption key in hash)
   const getPairingUrl = useCallback(() => {
     const origin = window.location.origin;
-    return `${origin}/?room=${roomId}#key=${keyBase64}`;
+    const cleanRoom = roomId.trim().toUpperCase();
+    return `${origin}/?room=${cleanRoom}#key=${keyBase64}`;
   }, [roomId, keyBase64]);
 
   return {

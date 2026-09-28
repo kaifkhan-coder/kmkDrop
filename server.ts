@@ -61,9 +61,34 @@ async function bootstrap() {
   // WebSocket Server on /ws
   const wss = new WebSocketServer({ server, path: '/ws' });
 
+  // Cloud Run / Reverse-proxy keepalive heartbeat (prevents 30s/60s idle disconnection)
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client: WebSocket) => {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.ping();
+        } catch {
+          // ignore
+        }
+      }
+    });
+  }, 15000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
+
+  wss.on('error', (err) => {
+    console.error('[BeamDrop WSS Error]:', err);
+  });
+
   wss.on('connection', (ws: WebSocket, req) => {
     let currentRoomId: string | null = null;
     let peerId = crypto.randomUUID();
+
+    ws.on('pong', () => {
+      // client replied to heartbeat ping
+    });
 
     ws.on('message', (rawMessage: string | Buffer) => {
       try {
@@ -72,13 +97,16 @@ async function bootstrap() {
 
         if (type === 'join') {
           const { roomId, deviceName = 'Unknown Device', deviceType = 'desktop', userEmail, userName } = message;
-          currentRoomId = roomId;
+          const cleanRoomId = String(roomId || '').trim().toUpperCase();
+          if (!cleanRoomId) return;
 
-          if (!rooms.has(roomId)) {
-            rooms.set(roomId, new Map());
+          currentRoomId = cleanRoomId;
+
+          if (!rooms.has(cleanRoomId)) {
+            rooms.set(cleanRoomId, new Map());
           }
 
-          const room = rooms.get(roomId)!;
+          const room = rooms.get(cleanRoomId)!;
           const session: PeerSession = {
             id: peerId,
             ws,
@@ -88,7 +116,7 @@ async function bootstrap() {
             lastActive: Date.now(),
             userEmail: isValidEmail(userEmail) ? userEmail.toLowerCase().trim() : undefined,
             userName: typeof userName === 'string' && userName.trim() ? userName.trim() : undefined,
-            roomId,
+            roomId: cleanRoomId,
           };
           room.set(peerId, session);
 
@@ -108,7 +136,7 @@ async function bootstrap() {
           ws.send(JSON.stringify({
             type: 'room_joined',
             peerId,
-            roomId,
+            roomId: cleanRoomId,
             peers: existingPeers,
           }));
 
@@ -184,14 +212,15 @@ async function bootstrap() {
           return;
         }
 
-        // Encrypted Relay Messages (transfer_meta, relay_chunk, chunk_ack, transfer_complete, cancel, peer_text_message)
+        // Encrypted Relay Messages (transfer_meta, relay_chunk, chunk_ack, transfer_complete, cancel, peer_text_message, key_sync)
         if (
           type === 'transfer_meta' ||
           type === 'relay_chunk' ||
           type === 'chunk_ack' ||
           type === 'transfer_complete' ||
           type === 'cancel_transfer' ||
-          type === 'peer_text_message'
+          type === 'peer_text_message' ||
+          type === 'key_sync'
         ) {
           room.forEach((p, id) => {
             if (id !== peerId && p.ws.readyState === WebSocket.OPEN) {
@@ -429,7 +458,7 @@ async function bootstrap() {
   // 6. Get submissions for evaluation display / verification
   app.get('/api/feedback', (_req: Request, res: Response) => {
     return res.json({
-      recipient: 'khankaifcom551@gmail.com',
+      recipient: 'feedback@beamdrop.app',
       totalSubmissions: feedbackList.length,
       submissions: feedbackList.slice(0, 50),
     });
