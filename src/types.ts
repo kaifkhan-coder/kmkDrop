@@ -118,4 +118,49 @@ export interface ActiveUsersStats {
   timestamp: number;
 }
 
+export interface AdminUserRecord {
+  id: string;
+  name: string;
+  email?: string;
+  deviceType: 'mobile' | 'desktop' | 'tablet' | 'unknown';
+  deviceName: string;
+  roomId?: string;
+  firstSeen: number;
+  lastActive: number;
+  transferCount: number;
+  status: 'online' | 'offline';
+}
+
+export interface AdminFeedbackRecord {
+  id: string;
+  targetRecipient: string;
+  rating: number;
+  category: string;
+  feedbackText: string;
+  userEmail: string;
+  userName: string;
+  deviceInfo?: string;
+  transferStats?: any;
+  isMandatorySecondUsage?: boolean;
+  submittedAt: number;
+  status: string;
+}
+
+export interface AdminStats {
+  totalTrackedUsers: number;
+  activeConnections: number;
+  activeRooms: number;
+  totalFeedback: number;
+  averageRating: number;
+  uptimeSeconds: number;
+  timestamp: number;
+}
+
+export interface AdminSession {
+  token: string;
+  email: string;
+  name: string;
+  authenticatedAt: number;
+}
+
 

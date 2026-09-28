@@ -293,7 +293,7 @@ export const FeedbackSection: React.FC<FeedbackSectionProps> = ({
               className="flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-neutral-900 px-6 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-neutral-800 disabled:opacity-50 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-100 transition"
             >
               <Send className="h-3.5 w-3.5" />
-              <span>{isSubmitting ? 'Transmitting...' : 'Send to khankaifcom551@gmail.com'}</span>
+              <span>{isSubmitting ? 'Transmitting...' : 'Send to associated team'}</span>
             </button>
           </div>
         </div>

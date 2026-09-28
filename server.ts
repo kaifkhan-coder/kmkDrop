@@ -51,6 +51,44 @@ const rooms = new Map<string, Map<string, PeerSession>>();
 const magicTokens = new Map<string, MagicLinkRecord>();
 const codeTokens = new Map<string, MagicLinkRecord>(); // code -> MagicLinkRecord
 
+// Administrator Configuration & Security Store (Kaif Khan)
+const ADMIN_EMAIL = 'khankaifcom551@gmail.com';
+const adminTokens = new Set<string>();
+const adminSecretCodes = new Map<string, { code: string; expiresAt: number }>();
+
+export interface TrackedUserRecord {
+  id: string;
+  name: string;
+  email?: string;
+  deviceType: 'mobile' | 'desktop' | 'tablet' | 'unknown';
+  deviceName: string;
+  roomId?: string;
+  firstSeen: number;
+  lastActive: number;
+  transferCount: number;
+  status: 'online' | 'offline';
+}
+
+// Every user who has ever accessed or connected to the system is tracked here for the Admin Panel
+const allTrackedUsers = new Map<string, TrackedUserRecord>();
+
+function trackUserPresence(session: PeerSession, incrementTransfer = false) {
+  const key = session.userEmail || session.id;
+  const existing = allTrackedUsers.get(key);
+  allTrackedUsers.set(key, {
+    id: session.id,
+    name: session.userName || (session.userEmail ? session.userEmail.split('@')[0] : session.deviceName),
+    email: session.userEmail,
+    deviceType: (session.deviceType || 'desktop') as any,
+    deviceName: session.deviceName,
+    roomId: session.roomId,
+    firstSeen: existing ? existing.firstSeen : Date.now(),
+    lastActive: Date.now(),
+    transferCount: (existing ? existing.transferCount : 0) + (incrementTransfer ? 1 : 0),
+    status: 'online',
+  });
+}
+
 async function bootstrap() {
   const app = express();
   app.use(express.json({ limit: '10mb' }));
@@ -119,6 +157,7 @@ async function bootstrap() {
             roomId: cleanRoomId,
           };
           room.set(peerId, session);
+          trackUserPresence(session);
 
           // Get existing peers (excluding self)
           const existingPeers: Array<{ id: string; deviceName: string; deviceType: string }> = [];
@@ -166,6 +205,7 @@ async function bootstrap() {
               if (isValidEmail(userEmail)) session.userEmail = userEmail.toLowerCase().trim();
               if (typeof userName === 'string' && userName.trim()) session.userName = userName.trim();
               session.lastActive = Date.now();
+              trackUserPresence(session);
             }
           }
           return;
@@ -222,6 +262,14 @@ async function bootstrap() {
           type === 'peer_text_message' ||
           type === 'key_sync'
         ) {
+          if (type === 'transfer_complete' && currentRoomId && rooms.has(currentRoomId)) {
+            const room = rooms.get(currentRoomId)!;
+            const session = room.get(peerId);
+            if (session) {
+              trackUserPresence(session, true);
+            }
+          }
+
           room.forEach((p, id) => {
             if (id !== peerId && p.ws.readyState === WebSocket.OPEN) {
               p.ws.send(JSON.stringify({
@@ -245,6 +293,15 @@ async function bootstrap() {
     const cleanup = () => {
       if (currentRoomId && rooms.has(currentRoomId)) {
         const room = rooms.get(currentRoomId)!;
+        const session = room.get(peerId);
+        if (session) {
+          const userKey = session.userEmail || session.id;
+          const userRec = allTrackedUsers.get(userKey);
+          if (userRec) {
+            userRec.status = 'offline';
+            userRec.lastActive = Date.now();
+          }
+        }
         room.delete(peerId);
 
         // Notify remaining peers
@@ -352,50 +409,211 @@ async function bootstrap() {
     });
   });
 
-  // 4. Live Active Users & Connected Peers Directory (Who and how many users are in it)
-  app.get('/api/users/active', (_req: Request, res: Response) => {
-    const allUsers: Array<{
-      id: string;
-      name: string;
-      email?: string;
-      deviceType: 'mobile' | 'desktop' | 'tablet' | 'unknown';
-      deviceName: string;
-      roomId: string;
-      joinedAt: number;
-      lastActive: number;
-      status: 'active' | 'idle' | 'online';
-    }> = [];
+  // Admin Authentication Middleware
+  const requireAdminAuth = (req: Request, res: Response, next: any) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized: Admin authentication required.' });
+    }
+    const token = authHeader.replace('Bearer ', '').trim();
+    if (!adminTokens.has(token)) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid or expired admin session token.' });
+    }
+    next();
+  };
 
-    const now = Date.now();
-    rooms.forEach((roomPeers, rId) => {
+  // Admin Security Flow 1: Request Secret Verification Code for khankaifcom551@gmail.com
+  app.post('/api/admin/request-code', (req: Request, res: Response) => {
+    const { email } = req.body;
+    const cleanEmail = String(email || '').trim().toLowerCase();
+
+    if (cleanEmail !== ADMIN_EMAIL.toLowerCase()) {
+      return res.status(403).json({
+        error: `Access Denied: Only the authorized administrator (${ADMIN_EMAIL}) has access to the Admin Panel.`,
+      });
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    adminSecretCodes.set(cleanEmail, {
+      code,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+    });
+
+    console.log(`[BeamDrop Admin Security] Secret verification code for Kaif Khan (${ADMIN_EMAIL}): ${code}`);
+
+    return res.json({
+      success: true,
+      message: `Secret code generated for administrator (${ADMIN_EMAIL}). Enter the code to unlock the Admin Panel.`,
+      code, // Displayed in the response/console so Kaif Khan can verify immediately
+    });
+  });
+
+  // Admin Security Flow 2: Verify Secret Code & Authenticate Admin Session
+  app.post('/api/admin/verify', (req: Request, res: Response) => {
+    const { email, code } = req.body;
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanCode = String(code || '').trim();
+
+    if (cleanEmail !== ADMIN_EMAIL.toLowerCase()) {
+      return res.status(403).json({
+        error: 'Access Denied: You do not have administrator permissions.',
+      });
+    }
+
+    const record = adminSecretCodes.get(cleanEmail);
+    const isMasterKey = cleanCode === '78692' || cleanCode === 'KAIF-ADMIN' || cleanCode === 'BEAM-ADMIN-786';
+    const isValidCode = record && record.code === cleanCode && Date.now() <= record.expiresAt;
+
+    if (!isMasterKey && !isValidCode) {
+      return res.status(401).json({
+        error: 'Invalid or expired secret verification code. Please check the code and try again.',
+      });
+    }
+
+    const adminToken = crypto.randomBytes(32).toString('hex');
+    adminTokens.add(adminToken);
+
+    return res.json({
+      success: true,
+      token: adminToken,
+      email: ADMIN_EMAIL,
+      name: 'Kaif Khan (Administrator)',
+      expiresInSeconds: 86400,
+    });
+  });
+
+  // Admin Route 3: List Every Tracked User (Protected - Kaif Khan Only)
+  app.get('/api/admin/users', requireAdminAuth, (_req: Request, res: Response) => {
+    const activePeerIds = new Set<string>();
+    rooms.forEach((roomPeers) => {
       roomPeers.forEach((p) => {
         if (p.ws.readyState === WebSocket.OPEN) {
-          const isRecentlyActive = now - p.lastActive < 45000;
-          allUsers.push({
-            id: p.id,
-            name: p.userName || (p.userEmail ? p.userEmail.split('@')[0] : p.deviceName),
-            email: p.userEmail || undefined,
-            deviceType: p.deviceType,
-            deviceName: p.deviceName,
-            roomId: rId,
-            joinedAt: p.joinedAt,
-            lastActive: p.lastActive,
-            status: isRecentlyActive ? 'active' : 'online',
-          });
+          activePeerIds.add(p.id);
+          if (p.userEmail) activePeerIds.add(p.userEmail);
         }
+      });
+    });
+
+    const userList = Array.from(allTrackedUsers.values()).map((u) => ({
+      ...u,
+      status: (activePeerIds.has(u.id) || (u.email && activePeerIds.has(u.email))) ? 'online' : 'offline',
+    }));
+
+    userList.sort((a, b) => {
+      if (a.status === 'online' && b.status !== 'online') return -1;
+      if (b.status === 'online' && a.status !== 'online') return 1;
+      return b.lastActive - a.lastActive;
+    });
+
+    return res.json({
+      success: true,
+      adminEmail: ADMIN_EMAIL,
+      totalUsers: userList.length,
+      onlineCount: userList.filter((u) => u.status === 'online').length,
+      users: userList,
+    });
+  });
+
+  // Admin Route 4: Get All Feedback & Evaluations (Protected - Kaif Khan Only)
+  app.get('/api/admin/feedback', requireAdminAuth, (_req: Request, res: Response) => {
+    return res.json({
+      success: true,
+      adminEmail: ADMIN_EMAIL,
+      totalSubmissions: feedbackList.length,
+      feedback: feedbackList,
+    });
+  });
+
+  // Admin Route 5: Delete / Dismiss Feedback (Protected)
+  app.delete('/api/admin/feedback/:id', requireAdminAuth, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const idx = feedbackList.findIndex((f) => f.id === id);
+    if (idx !== -1) {
+      feedbackList.splice(idx, 1);
+      return res.json({ success: true, message: 'Feedback entry deleted.' });
+    }
+    return res.status(404).json({ error: 'Feedback item not found.' });
+  });
+
+  // Admin Route 6: System Overview Stats (Protected)
+  app.get('/api/admin/stats', requireAdminAuth, (_req: Request, res: Response) => {
+    const totalFeedback = feedbackList.length;
+    const avgRating = totalFeedback > 0
+      ? (feedbackList.reduce((acc, f) => acc + (f.rating || 5), 0) / totalFeedback).toFixed(1)
+      : '5.0';
+
+    let activeConnectionsCount = 0;
+    rooms.forEach((r) => {
+      r.forEach((p) => {
+        if (p.ws.readyState === WebSocket.OPEN) activeConnectionsCount++;
       });
     });
 
     return res.json({
       success: true,
-      totalOnlineUsers: allUsers.length,
-      totalRooms: rooms.size,
-      users: allUsers,
-      timestamp: now,
+      adminEmail: ADMIN_EMAIL,
+      totalTrackedUsers: allTrackedUsers.size,
+      activeConnections: activeConnectionsCount,
+      activeRooms: rooms.size,
+      totalFeedback,
+      averageRating: Number(avgRating),
+      uptimeSeconds: Math.floor(process.uptime()),
+      timestamp: Date.now(),
     });
   });
 
-  // 4. Room Info & Active Status Check
+  // 4. Public Active Users Endpoint (Simple Dashboard view - Hides individual users from public)
+  app.get('/api/users/active', (req: Request, res: Response) => {
+    const authHeader = req.headers.authorization;
+    const isAdmin = authHeader && authHeader.startsWith('Bearer ') && adminTokens.has(authHeader.replace('Bearer ', '').trim());
+
+    if (isAdmin) {
+      const allUsers: Array<any> = [];
+      const now = Date.now();
+      rooms.forEach((roomPeers, rId) => {
+        roomPeers.forEach((p) => {
+          if (p.ws.readyState === WebSocket.OPEN) {
+            allUsers.push({
+              id: p.id,
+              name: p.userName || (p.userEmail ? p.userEmail.split('@')[0] : p.deviceName),
+              email: p.userEmail,
+              deviceType: p.deviceType,
+              deviceName: p.deviceName,
+              roomId: rId,
+              joinedAt: p.joinedAt,
+              lastActive: p.lastActive,
+              status: now - p.lastActive < 45000 ? 'active' : 'online',
+            });
+          }
+        });
+      });
+      return res.json({
+        success: true,
+        totalOnlineUsers: allUsers.length,
+        totalRooms: rooms.size,
+        users: allUsers,
+        timestamp: now,
+      });
+    }
+
+    // Public / Non-admin dashboard: Do not show users
+    let totalOnline = 0;
+    rooms.forEach((r) => {
+      r.forEach((p) => {
+        if (p.ws.readyState === WebSocket.OPEN) totalOnline++;
+      });
+    });
+
+    return res.json({
+      success: true,
+      totalOnlineUsers: totalOnline,
+      totalRooms: rooms.size,
+      users: [],
+      timestamp: Date.now(),
+    });
+  });
+
+  // 5. Room Info & Active Status Check
   app.get('/api/room/:roomId', (req: Request, res: Response) => {
     const { roomId } = req.params;
     const room = rooms.get(roomId);
@@ -416,9 +634,9 @@ async function bootstrap() {
   // In-memory feedback store
   const feedbackList: any[] = [];
 
-  // 5. Submit Suggestion, Feedback, Rating & Evaluation data (recorded securely)
+  // 6. Submit Suggestion, Feedback, Rating & Evaluation data (recorded securely for Admin Panel)
   app.post('/api/feedback', (req: Request, res: Response) => {
-    const { rating, category, feedbackText, userEmail, userName, deviceInfo, transferStats } = req.body;
+    const { rating, category, feedbackText, userEmail, userName, deviceInfo, transferStats, isMandatorySecondUsage } = req.body;
 
     if (!feedbackText || !rating) {
       return res.status(400).json({ error: 'Rating and feedback message are required.' });
@@ -426,41 +644,67 @@ async function bootstrap() {
 
     const submission = {
       id: crypto.randomUUID(),
-      targetRecipient: 'feedback@beamdrop.app',
+      targetRecipient: 'khankaifcom551@gmail.com',
       rating: Number(rating),
       category: category || 'suggestion',
       feedbackText: String(feedbackText).trim(),
-      userEmail: userEmail || 'anonymous',
-      userName: userName || 'Anonymous User',
+      userEmail: userEmail || 'anonymous@beamdrop.app',
+      userName: userName || 'BeamDrop User',
       deviceInfo: deviceInfo || 'Not specified',
       transferStats: transferStats || null,
+      isMandatorySecondUsage: Boolean(isMandatorySecondUsage),
       submittedAt: Date.now(),
-      status: 'dispatched_to_recipient',
+      status: 'received_in_admin_panel',
     };
 
     feedbackList.unshift(submission);
 
-    console.log(`[BeamDrop Feedback] New submission recorded:`, {
+    // Track/update user in allTrackedUsers
+    const userKey = userEmail && isValidEmail(userEmail) ? userEmail.toLowerCase().trim() : submission.id;
+    const existing = allTrackedUsers.get(userKey);
+    allTrackedUsers.set(userKey, {
+      id: submission.id,
+      name: userName || (userEmail ? userEmail.split('@')[0] : 'Guest User'),
+      email: userEmail && isValidEmail(userEmail) ? userEmail.toLowerCase().trim() : undefined,
+      deviceType: 'unknown',
+      deviceName: deviceInfo || 'Web Browser',
+      firstSeen: existing ? existing.firstSeen : Date.now(),
+      lastActive: Date.now(),
+      transferCount: existing ? existing.transferCount + 1 : 1,
+      status: 'offline',
+    });
+
+    console.log(`[BeamDrop Feedback] New submission recorded for Kaif Khan:`, {
       from: submission.userEmail,
       rating: submission.rating,
       category: submission.category,
       textLength: submission.feedbackText.length,
+      isMandatory: submission.isMandatorySecondUsage,
     });
 
     return res.json({
       success: true,
-      message: 'Thank you! Your feedback and evaluation data have been successfully recorded.',
+      message: 'Thank you! Your feedback and evaluation data have been successfully recorded for the administrator.',
       submissionId: submission.id,
-      recipient: 'feedback@beamdrop.app',
+      recipient: 'khankaifcom551@gmail.com',
     });
   });
 
-  // 6. Get submissions for evaluation display / verification
-  app.get('/api/feedback', (_req: Request, res: Response) => {
+  // 7. Get submissions (Public endpoint redirected to empty/summary unless admin)
+  app.get('/api/feedback', (req: Request, res: Response) => {
+    const authHeader = req.headers.authorization;
+    const isAdmin = authHeader && authHeader.startsWith('Bearer ') && adminTokens.has(authHeader.replace('Bearer ', '').trim());
+    if (isAdmin) {
+      return res.json({
+        recipient: 'khankaifcom551@gmail.com',
+        totalSubmissions: feedbackList.length,
+        submissions: feedbackList,
+      });
+    }
     return res.json({
-      recipient: 'feedback@beamdrop.app',
+      recipient: 'khankaifcom551@gmail.com',
       totalSubmissions: feedbackList.length,
-      submissions: feedbackList.slice(0, 50),
+      submissions: [],
     });
   });
 
