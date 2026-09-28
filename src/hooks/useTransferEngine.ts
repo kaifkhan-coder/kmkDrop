@@ -6,7 +6,11 @@ import {
   TransferHistoryItem,
   PeerDevice,
   TransferStatus,
+  PeerTextMessage,
+  ActiveUsersStats,
+  UserSession,
 } from '../types';
+import { safeFetchJson } from '../utils/api';
 import {
   generateAESKey,
   exportKeyToBase64,
@@ -60,12 +64,66 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
   const [transferQueue, setTransferQueue] = useState<File[]>([]);
   const [isPaused, setIsPaused] = useState(false);
 
+  // Peer-to-Peer Text Messages (Mobile <-> PC Instant Sync)
+  const [textMessages, setTextMessages] = useState<PeerTextMessage[]>(() => {
+    try {
+      const saved = sessionStorage.getItem(`beamdrop_texts_${roomId}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // References
   const wsRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const activePeerIdRef = useRef<string | null>(null);
+  const selfPeerIdRef = useRef<string | null>(null);
   const isInitiatorRef = useRef(false);
+
+  // Live Connected Users / System Presence (Who and how many users are in it)
+  const [activeUsersStats, setActiveUsersStats] = useState<ActiveUsersStats | null>(null);
+
+  const fetchActiveUsers = useCallback(async () => {
+    try {
+      const res = await safeFetchJson<ActiveUsersStats>('/api/users/active');
+      if (res.ok && res.data) {
+        const selfId = selfPeerIdRef.current;
+        const usersWithSelf = res.data.users.map((u) => ({
+          ...u,
+          isSelf: u.id === selfId,
+        }));
+        setActiveUsersStats({
+          ...res.data,
+          users: usersWithSelf,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const sendUserIdentification = useCallback((user: UserSession | null) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN && user) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'identify',
+          userEmail: user.email,
+          userName: user.name,
+        })
+      );
+      // Refresh user stats immediately
+      setTimeout(fetchActiveUsers, 300);
+    }
+  }, [fetchActiveUsers]);
+
+  // Periodic polling for active users count and directory
+  useEffect(() => {
+    fetchActiveUsers();
+    const interval = setInterval(fetchActiveUsers, 5000);
+    return () => clearInterval(interval);
+  }, [fetchActiveUsers]);
 
   // Inbound File Assembly Buffer
   const incomingFileMetaRef = useRef<FileMetadata | null>(null);
@@ -269,8 +327,24 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
         );
         return;
       }
+
+      if (type === 'peer_text_message') {
+        const incomingMsg: PeerTextMessage = msg.message;
+        setTextMessages((prev) => {
+          if (prev.some((m) => m.id === incomingMsg.id)) return prev;
+          const updated = [...prev, incomingMsg];
+          try {
+            sessionStorage.setItem(`beamdrop_texts_${roomId}`, JSON.stringify(updated));
+          } catch {
+            // ignore
+          }
+          return updated;
+        });
+        playChime('receive');
+        return;
+      }
     },
-    []
+    [roomId]
   );
 
   // 5. Handle binary chunks received (E2EE Decryption in real-time)
@@ -421,12 +495,28 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
     ws.onopen = () => {
       setIsWsConnected(true);
       const deviceInfo = detectDevice();
+
+      let userEmail: string | undefined;
+      let userName: string | undefined;
+      try {
+        const saved = localStorage.getItem('beamdrop_user');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          userEmail = parsed.email;
+          userName = parsed.name;
+        }
+      } catch {
+        // ignore
+      }
+
       ws.send(
         JSON.stringify({
           type: 'join',
           roomId,
           deviceName: deviceInfo.name,
           deviceType: deviceInfo.type,
+          userEmail,
+          userName,
         })
       );
     };
@@ -441,6 +531,9 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
         const { type } = msg;
 
         if (type === 'room_joined') {
+          if (msg.peerId) {
+            selfPeerIdRef.current = msg.peerId;
+          }
           if (msg.peers && Array.isArray(msg.peers)) {
             setPeers(msg.peers);
             // If there's an existing peer, initiate WebRTC connection
@@ -536,6 +629,11 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
         }
 
         if (type === 'cancel_transfer') {
+          handleControlMessage(msg);
+          return;
+        }
+
+        if (type === 'peer_text_message') {
           handleControlMessage(msg);
           return;
         }
@@ -769,7 +867,66 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
     setIsPaused(false);
   }, []);
 
-  // 10. Generate full shareable pairing URL (with encryption key in hash)
+  // 10. Peer-to-Peer Text & Clipboard Messaging (Mobile to PC and PC to Mobile)
+  const sendTextMessage = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return null;
+
+      const deviceInfo = detectDevice();
+      const messageId = crypto.randomUUID();
+      const msg: PeerTextMessage = {
+        id: messageId,
+        senderId: selfPeerIdRef.current || 'self',
+        senderName: deviceInfo.name,
+        senderDeviceType: deviceInfo.type,
+        text: trimmed,
+        timestamp: Date.now(),
+        direction: 'sent',
+      };
+
+      const payload = {
+        type: 'peer_text_message',
+        roomId,
+        message: {
+          ...msg,
+          direction: 'received',
+        },
+      };
+
+      const hasDataChannel = dataChannelRef.current?.readyState === 'open';
+      if (hasDataChannel) {
+        dataChannelRef.current!.send(JSON.stringify(payload));
+      } else if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(payload));
+      }
+
+      setTextMessages((prev) => {
+        const updated = [...prev, msg];
+        try {
+          sessionStorage.setItem(`beamdrop_texts_${roomId}`, JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+        return updated;
+      });
+
+      playChime('connected');
+      return msg;
+    },
+    [roomId]
+  );
+
+  const clearTextMessages = useCallback(() => {
+    setTextMessages([]);
+    try {
+      sessionStorage.removeItem(`beamdrop_texts_${roomId}`);
+    } catch {
+      // ignore
+    }
+  }, [roomId]);
+
+  // 11. Generate full shareable pairing URL (with encryption key in hash)
   const getPairingUrl = useCallback(() => {
     const origin = window.location.origin;
     return `${origin}/?room=${roomId}#key=${keyBase64}`;
@@ -794,5 +951,11 @@ export function useTransferEngine(initialRoomId?: string, initialKeyBase64?: str
     cancelTransfer,
     resetTransferState,
     getPairingUrl,
+    textMessages,
+    sendTextMessage,
+    clearTextMessages,
+    activeUsersStats,
+    fetchActiveUsers,
+    sendUserIdentification,
   };
 }

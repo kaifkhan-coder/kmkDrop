@@ -87,3 +87,35 @@ export interface FeedbackSubmission {
   };
   submittedAt: number;
 }
+
+export interface PeerTextMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderDeviceType: 'mobile' | 'desktop' | 'tablet' | 'unknown';
+  text: string;
+  timestamp: number;
+  direction: 'sent' | 'received';
+}
+
+export interface ActivePeerUser {
+  id: string;
+  name: string;
+  email?: string;
+  deviceType: 'mobile' | 'desktop' | 'tablet' | 'unknown';
+  deviceName: string;
+  roomId: string;
+  joinedAt: number;
+  lastActive: number;
+  status: 'active' | 'idle' | 'online';
+  isSelf?: boolean;
+}
+
+export interface ActiveUsersStats {
+  totalOnlineUsers: number;
+  totalRooms: number;
+  users: ActivePeerUser[];
+  timestamp: number;
+}
+
+

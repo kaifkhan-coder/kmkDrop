@@ -1,16 +1,19 @@
 import React from 'react';
-import { Sun, Moon, Sparkles, ShieldCheck, User as UserIcon, LogOut, Laptop, Smartphone } from 'lucide-react';
+import { Sun, Moon, Sparkles, ShieldCheck, User as UserIcon, LogOut, Laptop, Smartphone, Users } from 'lucide-react';
 import { ThemeMode, UserSession } from '../types';
 
 interface HeaderProps {
-  currentTab: 'send' | 'receive' | 'history' | 'security';
-  onSelectTab: (tab: 'send' | 'receive' | 'history' | 'security') => void;
+  currentTab: 'send' | 'receive' | 'messages' | 'users' | 'history' | 'security';
+  onSelectTab: (tab: 'send' | 'receive' | 'messages' | 'users' | 'history' | 'security') => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
   user: UserSession | null;
   onOpenAuth: () => void;
   onLogout: () => void;
   peersCount: number;
+  unreadMessagesCount?: number;
+  activeUsersCount?: number;
+  onOpenActiveUsers?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +25,9 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAuth,
   onLogout,
   peersCount,
+  unreadMessagesCount = 0,
+  activeUsersCount = 1,
+  onOpenActiveUsers,
 }) => {
   return (
     <header className="sticky top-0 z-40 w-full border-b border-neutral-200/80 bg-white/90 backdrop-blur-md transition-colors dark:border-neutral-800 dark:bg-neutral-950/90">
@@ -38,24 +44,29 @@ export const Header: React.FC<HeaderProps> = ({
             <span>BeamDrop</span>
           </button>
 
-          {/* Quiet connected peer indicator and View-Only status badge */}
-          <div className="hidden sm:flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400 pl-2">
-            <span className={`h-2 w-2 rounded-full ${peersCount > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-neutral-300 dark:bg-neutral-700'}`} />
-            <span>{peersCount > 0 ? `${peersCount} device connected` : 'Awaiting peer'}</span>
-            {!user && (
-              <span className="rounded-md bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300 border border-amber-500/20">
-                View-Only
-              </span>
-            )}
-          </div>
+          {/* Active Users Badge Button (Who and how many users are in it) */}
+          <button
+            onClick={onOpenActiveUsers || (() => onSelectTab('users'))}
+            title="Click to see who and how many users are in the system"
+            className="flex items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-100/90 px-2.5 py-1 text-xs font-semibold text-neutral-800 hover:border-neutral-400 hover:bg-neutral-200/60 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:border-neutral-700 transition"
+          >
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            <Users className="h-3.5 w-3.5 text-indigo-500" />
+            <span className="tabular-nums">{activeUsersCount} Online</span>
+          </button>
 
+          {!user && (
+            <span className="hidden sm:inline-block rounded-md bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300 border border-amber-500/20">
+              View-Only
+            </span>
+          )}
         </div>
 
-        {/* Zone 2: Clean 4 Navigation links */}
+        {/* Zone 2: Navigation links */}
         <nav className="flex items-center gap-1 sm:gap-2">
           <button
             onClick={() => onSelectTab('send')}
-            className={`px-3 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`px-2.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
               currentTab === 'send'
                 ? 'text-neutral-950 dark:text-white underline decoration-neutral-950 dark:decoration-white underline-offset-8 decoration-2'
                 : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
@@ -65,7 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSelectTab('receive')}
-            className={`px-3 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`px-2.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
               currentTab === 'receive'
                 ? 'text-neutral-950 dark:text-white underline decoration-neutral-950 dark:decoration-white underline-offset-8 decoration-2'
                 : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
@@ -74,8 +85,36 @@ export const Header: React.FC<HeaderProps> = ({
             Receive / Pair
           </button>
           <button
+            onClick={() => onSelectTab('messages')}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
+              currentTab === 'messages'
+                ? 'text-neutral-950 dark:text-white underline decoration-neutral-950 dark:decoration-white underline-offset-8 decoration-2'
+                : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
+            }`}
+          >
+            <span>Text / Clipboard</span>
+            {unreadMessagesCount && unreadMessagesCount > 0 ? (
+              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-neutral-900 text-[10px] font-bold text-white dark:bg-white dark:text-neutral-950">
+                {unreadMessagesCount}
+              </span>
+            ) : null}
+          </button>
+          <button
+            onClick={() => onSelectTab('users')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
+              currentTab === 'users'
+                ? 'text-neutral-950 dark:text-white underline decoration-neutral-950 dark:decoration-white underline-offset-8 decoration-2'
+                : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
+            }`}
+          >
+            <span>Users</span>
+            <span className="rounded-full bg-neutral-200 px-1.5 py-0.2 text-[10px] font-semibold text-neutral-800 dark:bg-neutral-800 dark:text-neutral-300">
+              {activeUsersCount}
+            </span>
+          </button>
+          <button
             onClick={() => onSelectTab('history')}
-            className={`px-3 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`hidden sm:block px-2.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
               currentTab === 'history'
                 ? 'text-neutral-950 dark:text-white underline decoration-neutral-950 dark:decoration-white underline-offset-8 decoration-2'
                 : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
@@ -85,7 +124,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSelectTab('security')}
-            className={`hidden md:block px-3 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`hidden md:block px-2.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
               currentTab === 'security'
                 ? 'text-neutral-950 dark:text-white underline decoration-neutral-950 dark:decoration-white underline-offset-8 decoration-2'
                 : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'

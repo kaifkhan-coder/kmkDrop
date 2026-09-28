@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Mail, Check, ArrowRight, X, Sparkles, Shield, KeyRound } from 'lucide-react';
+import { Mail, Check, ArrowRight, X, Sparkles, Shield, KeyRound, AlertCircle } from 'lucide-react';
 import { UserSession } from '../types';
 import { safeFetchJson } from '../utils/api';
+import { isValidEmail } from '../utils/validation';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -10,7 +11,7 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const [email, setEmail] = useState('khankaifcom551@gmail.com');
+  const [email, setEmail] = useState('');
   const [step, setStep] = useState<'input' | 'sent'>('input');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,8 +25,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
   const handleSendMagicLink = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!email || !email.includes('@')) {
-      setError('Please provide a valid Gmail / email address.');
+    const cleanEmail = email.trim();
+    if (!isValidEmail(cleanEmail)) {
+      setError('Please provide a valid email address (e.g. yourname@gmail.com).');
       return;
     }
 
@@ -36,7 +38,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       const result = await safeFetchJson('/api/auth/magic-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email: cleanEmail }),
       });
 
       if (result.ok && result.data) {
@@ -72,13 +74,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
     const activeToken = tokenToUse || magicToken;
     const activeCode = codeToUse || enteredCode;
+    const cleanEmail = email.trim().toLowerCase();
 
     try {
       const result = await safeFetchJson('/api/auth/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email,
+          email: cleanEmail,
           token: activeToken,
           code: activeCode,
         }),
@@ -92,11 +95,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
       // If server returned error or is in offline mode, verify code matches active code
       if (activeCode && activeCode.length === 6) {
-        const username = email.split('@')[0];
+        const username = cleanEmail.split('@')[0];
         const formattedName = username.charAt(0).toUpperCase() + username.slice(1);
         const fallbackUser: UserSession = {
           id: Math.random().toString(36).substring(2, 14),
-          email: email.toLowerCase().trim(),
+          email: cleanEmail,
           name: formattedName,
           initials: formattedName.slice(0, 2).toUpperCase(),
           provider: 'magic_link',
@@ -116,6 +119,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   };
 
   const handleGoogleSignIn = async () => {
+    const cleanEmail = email.trim();
+    if (!isValidEmail(cleanEmail)) {
+      setError('Please enter your valid email address in the field below first to continue with Google.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -124,8 +133,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: email || 'khankaifcom551@gmail.com',
-          name: email.split('@')[0] ? email.split('@')[0].toUpperCase() : 'Kaif Khan',
+          email: cleanEmail,
+          name: cleanEmail.split('@')[0],
         }),
       });
 
@@ -136,25 +145,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       }
 
       // Seamless direct sign in fallback
-      const targetEmail = (email || 'khankaifcom551@gmail.com').toLowerCase().trim();
+      const targetEmail = cleanEmail.toLowerCase();
       const username = targetEmail.split('@')[0];
       const fallbackUser: UserSession = {
         id: Math.random().toString(36).substring(2, 14),
         email: targetEmail,
         name: username.charAt(0).toUpperCase() + username.slice(1),
-        initials: username.slice(0, 2).toUpperCase() || 'KK',
+        initials: username.slice(0, 2).toUpperCase() || 'US',
         provider: 'google',
         authenticatedAt: Date.now(),
       };
       onSuccess(fallbackUser);
       onClose();
     } catch {
-      const targetEmail = (email || 'khankaifcom551@gmail.com').toLowerCase().trim();
+      const targetEmail = cleanEmail.toLowerCase();
+      const username = targetEmail.split('@')[0];
       const fallbackUser: UserSession = {
         id: Math.random().toString(36).substring(2, 14),
         email: targetEmail,
-        name: 'Kaif Khan',
-        initials: 'KK',
+        name: username.charAt(0).toUpperCase() + username.slice(1),
+        initials: username.slice(0, 2).toUpperCase() || 'US',
         provider: 'google',
         authenticatedAt: Date.now(),
       };
@@ -243,12 +253,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@gmail.com"
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (error) setError(null);
+                    }}
+                    placeholder="name@example.com"
                     required
                     className="w-full rounded-xl border border-neutral-300 bg-white py-2 pl-9 pr-3 text-sm text-neutral-900 placeholder-neutral-400 outline-none transition focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900 dark:border-neutral-800 dark:bg-neutral-900 dark:text-white dark:focus:border-white dark:focus:ring-white"
                   />
                 </div>
+                <p className="mt-1 text-[11px] text-neutral-400">
+                  Please enter a valid personal or work email address.
+                </p>
               </div>
 
               <button

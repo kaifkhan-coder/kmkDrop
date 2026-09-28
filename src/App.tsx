@@ -20,6 +20,7 @@ import {
   Eye,
   ArrowRight,
   Share2,
+  MessageSquare,
 } from 'lucide-react';
 import { Header } from './components/Header';
 import { QRCodeDisplay } from './components/QRCodeDisplay';
@@ -31,6 +32,8 @@ import { TransferHistoryView } from './components/TransferHistoryView';
 import { SecurityExplainer } from './components/SecurityExplainer';
 import { AuthModal } from './components/AuthModal';
 import { FeedbackSection } from './components/FeedbackSection';
+import { TextMessageSection } from './components/TextMessageSection';
+import { ActiveUsersModal } from './components/ActiveUsersModal';
 import { useTransferEngine } from './hooks/useTransferEngine';
 import { ThemeMode, UserSession, ReceivedFileItem } from './types';
 import { formatBytes, getFileCategory } from './utils/format';
@@ -42,11 +45,12 @@ export default function App() {
   });
 
   // Current active navigation tab
-  const [currentTab, setCurrentTab] = useState<'send' | 'receive' | 'history' | 'security'>('send');
+  const [currentTab, setCurrentTab] = useState<'send' | 'receive' | 'messages' | 'users' | 'history' | 'security'>('send');
 
   // Modals
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isUsersModalOpen, setIsUsersModalOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<ReceivedFileItem | null>(null);
 
   // Authenticated User Session
@@ -81,6 +85,12 @@ export default function App() {
     cancelTransfer,
     resetTransferState,
     getPairingUrl,
+    textMessages,
+    sendTextMessage,
+    clearTextMessages,
+    activeUsersStats,
+    fetchActiveUsers,
+    sendUserIdentification,
   } = useTransferEngine();
 
   // Apply Theme class to document root
@@ -193,6 +203,7 @@ export default function App() {
         onOpenAuth={() => setIsAuthOpen(true)}
         onLogout={handleLogout}
         peersCount={peers.length}
+        unreadMessagesCount={textMessages.filter((m) => m.direction === 'received').length}
       />
 
       {/* Main Viewport Container */}
@@ -264,6 +275,14 @@ export default function App() {
                     >
                       <Camera className="h-4 w-4 text-neutral-500" />
                       <span>Scan QR with Camera</span>
+                    </button>
+
+                    <button
+                      onClick={() => setCurrentTab('messages')}
+                      className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-900/60 transition"
+                    >
+                      <MessageSquare className="h-4 w-4 text-indigo-500" />
+                      <span>Send Text / Links to PC</span>
                     </button>
                   </div>
                 </div>
@@ -431,6 +450,29 @@ export default function App() {
               </p>
             </div>
 
+            {/* Quick Action banner to switch to Text / Clipboard */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/30">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-700 dark:text-indigo-300">
+                  <MessageSquare className="h-4 w-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-neutral-900 dark:text-white">
+                    Need to send text, notes, or links from Mobile to PC?
+                  </h4>
+                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    You can beam clipboard text, URLs, OTPs, and messages directly between paired devices.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setCurrentTab('messages')}
+                className="shrink-0 rounded-xl bg-neutral-900 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-100 transition whitespace-nowrap"
+              >
+                Open Text / Clipboard Beam
+              </button>
+            </div>
+
             {/* Active Transfer Progress */}
             {currentTransfer && (
               <TransferProgressView
@@ -561,7 +603,20 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: TRANSFER HISTORY */}
+        {/* TAB 3: TEXT & CLIPBOARD BEAM (MOBILE TO PC INSTANT SYNC) */}
+        {currentTab === 'messages' && (
+          <TextMessageSection
+            messages={textMessages}
+            peers={peers}
+            onSendMessage={sendTextMessage}
+            onClearMessages={clearTextMessages}
+            isSignedIn={Boolean(user)}
+            onRequireAuth={() => setIsAuthOpen(true)}
+            onOpenQR={() => setCurrentTab('receive')}
+          />
+        )}
+
+        {/* TAB 4: TRANSFER HISTORY */}
         {currentTab === 'history' && (
           <TransferHistoryView
             history={history}

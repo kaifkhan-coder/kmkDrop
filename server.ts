@@ -17,6 +17,10 @@ interface PeerSession {
   deviceName: string;
   deviceType: 'mobile' | 'desktop' | 'tablet' | 'unknown';
   joinedAt: number;
+  lastActive: number;
+  userEmail?: string;
+  userName?: string;
+  roomId: string;
 }
 
 interface MagicLinkRecord {
@@ -24,6 +28,20 @@ interface MagicLinkRecord {
   code: string;
   token: string;
   expiresAt: number;
+}
+
+function isValidEmail(email: unknown): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const trimmed = email.trim();
+  if (trimmed.length < 5 || trimmed.length > 254) return false;
+  const regex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+  if (!regex.test(trimmed)) return false;
+  const parts = trimmed.split('@');
+  if (parts.length !== 2) return false;
+  const domainParts = parts[1].split('.');
+  if (domainParts.length < 2) return false;
+  const tld = domainParts[domainParts.length - 1];
+  return Boolean(tld && tld.length >= 2 && /^[a-zA-Z]+$/.test(tld));
 }
 
 // In-memory rooms: roomId -> Map<peerId, PeerSession>
@@ -53,7 +71,7 @@ async function bootstrap() {
         const { type } = message;
 
         if (type === 'join') {
-          const { roomId, deviceName = 'Unknown Device', deviceType = 'desktop' } = message;
+          const { roomId, deviceName = 'Unknown Device', deviceType = 'desktop', userEmail, userName } = message;
           currentRoomId = roomId;
 
           if (!rooms.has(roomId)) {
@@ -67,6 +85,10 @@ async function bootstrap() {
             deviceName,
             deviceType,
             joinedAt: Date.now(),
+            lastActive: Date.now(),
+            userEmail: isValidEmail(userEmail) ? userEmail.toLowerCase().trim() : undefined,
+            userName: typeof userName === 'string' && userName.trim() ? userName.trim() : undefined,
+            roomId,
           };
           room.set(peerId, session);
 
@@ -106,6 +128,29 @@ async function bootstrap() {
           return;
         }
 
+        // Handle user authentication identification
+        if (type === 'identify') {
+          const { userEmail, userName } = message;
+          if (currentRoomId && rooms.has(currentRoomId)) {
+            const room = rooms.get(currentRoomId)!;
+            const session = room.get(peerId);
+            if (session) {
+              if (isValidEmail(userEmail)) session.userEmail = userEmail.toLowerCase().trim();
+              if (typeof userName === 'string' && userName.trim()) session.userName = userName.trim();
+              session.lastActive = Date.now();
+            }
+          }
+          return;
+        }
+
+        if (currentRoomId && rooms.has(currentRoomId)) {
+          const room = rooms.get(currentRoomId)!;
+          const session = room.get(peerId);
+          if (session) {
+            session.lastActive = Date.now();
+          }
+        }
+
         if (!currentRoomId || !rooms.has(currentRoomId)) {
           return;
         }
@@ -139,13 +184,14 @@ async function bootstrap() {
           return;
         }
 
-        // Encrypted Relay Messages (transfer_meta, relay_chunk, chunk_ack, transfer_complete, cancel)
+        // Encrypted Relay Messages (transfer_meta, relay_chunk, chunk_ack, transfer_complete, cancel, peer_text_message)
         if (
           type === 'transfer_meta' ||
           type === 'relay_chunk' ||
           type === 'chunk_ack' ||
           type === 'transfer_complete' ||
-          type === 'cancel_transfer'
+          type === 'cancel_transfer' ||
+          type === 'peer_text_message'
         ) {
           room.forEach((p, id) => {
             if (id !== peerId && p.ws.readyState === WebSocket.OPEN) {
@@ -194,24 +240,25 @@ async function bootstrap() {
 
   // REST API Routes
 
-  // 1. Magic Link generation
+  // 1. Magic Link generation (Strict valid email required)
   app.post('/api/auth/magic-link', (req: Request, res: Response) => {
     const { email } = req.body;
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
-      return res.status(400).json({ error: 'Valid email address is required.' });
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address (e.g. name@domain.com).' });
     }
 
+    const cleanEmail = String(email).toLowerCase().trim();
     const token = crypto.randomBytes(24).toString('hex');
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = Date.now() + 15 * 60 * 1000; // 15 mins
 
-    const record: MagicLinkRecord = { email: email.toLowerCase().trim(), code, token, expiresAt };
+    const record: MagicLinkRecord = { email: cleanEmail, code, token, expiresAt };
     magicTokens.set(token, record);
     codeTokens.set(code, record);
 
     return res.json({
       success: true,
-      message: `Magic link & verification code generated for ${email}`,
+      message: `Magic link & verification code generated for ${cleanEmail}`,
       token,
       code,
       expiresInMinutes: 15,
@@ -252,19 +299,70 @@ async function bootstrap() {
     });
   });
 
-  // 3. Quick Google Sign-In Simulation
+  // 3. Quick Google Sign-In Simulation (Valid email required, no hardcoded default)
   app.post('/api/auth/google', (req: Request, res: Response) => {
-    const { email = 'khankaifcom551@gmail.com', name = 'Kaif Khan' } = req.body;
+    const { email, name } = req.body;
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address to sign in with Google.' });
+    }
+
+    const cleanEmail = String(email).toLowerCase().trim();
+    const rawName = (name && typeof name === 'string' && name.trim()) ? name.trim() : cleanEmail.split('@')[0];
+    const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+
     return res.json({
       success: true,
       user: {
-        id: crypto.createHash('md5').update(email).digest('hex').slice(0, 12),
-        email: email.toLowerCase().trim(),
-        name,
-        initials: name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() || 'KK',
+        id: crypto.createHash('md5').update(cleanEmail).digest('hex').slice(0, 12),
+        email: cleanEmail,
+        name: formattedName,
+        initials: formattedName.slice(0, 2).toUpperCase() || 'US',
         provider: 'google',
         authenticatedAt: Date.now(),
       },
+    });
+  });
+
+  // 4. Live Active Users & Connected Peers Directory (Who and how many users are in it)
+  app.get('/api/users/active', (_req: Request, res: Response) => {
+    const allUsers: Array<{
+      id: string;
+      name: string;
+      email?: string;
+      deviceType: 'mobile' | 'desktop' | 'tablet' | 'unknown';
+      deviceName: string;
+      roomId: string;
+      joinedAt: number;
+      lastActive: number;
+      status: 'active' | 'idle' | 'online';
+    }> = [];
+
+    const now = Date.now();
+    rooms.forEach((roomPeers, rId) => {
+      roomPeers.forEach((p) => {
+        if (p.ws.readyState === WebSocket.OPEN) {
+          const isRecentlyActive = now - p.lastActive < 45000;
+          allUsers.push({
+            id: p.id,
+            name: p.userName || (p.userEmail ? p.userEmail.split('@')[0] : p.deviceName),
+            email: p.userEmail || undefined,
+            deviceType: p.deviceType,
+            deviceName: p.deviceName,
+            roomId: rId,
+            joinedAt: p.joinedAt,
+            lastActive: p.lastActive,
+            status: isRecentlyActive ? 'active' : 'online',
+          });
+        }
+      });
+    });
+
+    return res.json({
+      success: true,
+      totalOnlineUsers: allUsers.length,
+      totalRooms: rooms.size,
+      users: allUsers,
+      timestamp: now,
     });
   });
 
